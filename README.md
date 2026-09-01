@@ -1,94 +1,126 @@
 # 人员账号与权限台账管理平台
 
-一个用于管理企业人员、系统、账号和权限的综合性台账管理平台。主要用于跟踪人员账号绑定关系，支持离职人员账号自动回收。
+<p align="center">
+  <img src="https://img.shields.io/badge/Vue-3.x-blue" alt="Vue 3">
+  <img src="https://img.shields.io/badge/FastAPI-0.100+-green" alt="FastAPI">
+  <img src="https://img.shields.io/badge/MySQL-8.0-orange" alt="MySQL 8">
+  <img src="https://img.shields.io/badge/Docker-Compose-blue" alt="Docker">
+  <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License">
+</p>
 
-## 功能特性
+企业级人员账号与权限台账管理平台，专注于人员、系统、账号和权限的统一管理，支持离职人员账号自动回收。
 
-### 核心功能
-- **人员管理** - 员工信息录入、编辑、离职处理
-- **系统管理** - 业务系统登记和管理
-- **账号管理** - 系统账号创建和维护
-- **审计日志** - 所有操作记录可追溯
+## ✨ 功能特性
 
-### 台账功能
+### 📊 工作台
+- 统计概览（人员、系统、账号、绑定数量）
+- 部门人员分布图表
+- 最近操作记录
+
+### 👥 人员管理
+- 员工信息录入、编辑、删除
+- 离职处理（自动解绑账号、撤销权限）
+- 按部门、状态筛选
+
+### 🖥️ 系统管理
+- 业务系统登记和维护
+- 查看系统关联人员
+- 支持按名称搜索
+
+### 🔑 账号管理
+- 系统账号创建和维护
+- 绑定/解绑人员
+- 支持多种账号类型（普通/管理员/服务/共享）
+
+### 📋 台账查询
 - **人员台账** - 查看人员关联的所有账号
 - **系统台账** - 查看系统关联的所有人员和账号
 
-### 关系管理
-- 人员 ↔ 账号绑定（支持主要/次要/临时类型）
-- 离职处理自动解绑账号并撤销权限
-- 删除人员/账号自动清理绑定关系
+### 📝 审计日志
+- 所有操作记录可追溯
+- 支持按操作类型、对象类型筛选
 
-### 工作台
-- 统计概览（人员、系统、账号、绑定数量）
-- 部门人员分布
-- 最近操作记录
+## 🚀 快速部署
 
-## 技术栈
+### Ubuntu 一键部署
 
-### 前端
-- Vue 3 + TypeScript
-- Vite 构建工具
-- Element Plus UI 组件库
-- Vue Router 路由管理
-- Axios HTTP 客户端
-
-### 后端
-- Python 3.12
-- FastAPI Web框架
-- SQLAlchemy ORM
-- JWT 认证
-- bcrypt 密码加密
-
-### 数据库
-- MySQL 8.0
-
-### 部署
-- Docker Compose 容器化部署
-
-## 快速开始
-
-### 环境要求
-- Docker 20+
-- Docker Compose 2+
-
-### 部署步骤
-
-1. 克隆项目
 ```bash
-git clone <repository-url>
+# 克隆项目
+git clone https://github.com/Sean-keep/account-permission-platform.git
 cd account-permission-platform
+
+# 执行部署脚本
+chmod +x deploy.sh
+sudo ./deploy.sh
 ```
 
-2. 启动服务
+部署完成后访问：
+- 前端地址: `http://你的服务器IP:3000`
+- 默认账号: `admin / admin123`
+
+### Docker Compose 部署
+
 ```bash
-docker-compose up -d
+# 克隆项目
+git clone https://github.com/Sean-keep/account-permission-platform.git
+cd account-permission-platform
+
+# 创建环境配置
+cat > backend/.env << EOF
+MYSQL_HOST=mysql
+MYSQL_PORT=3306
+MYSQL_USER=app_user
+MYSQL_PASSWORD=your_password
+MYSQL_DATABASE=account_permission
+JWT_SECRET_KEY=$(openssl rand -base64 32)
+JWT_EXPIRE_MINUTES=480
+EOF
+
+# 启动服务
+docker compose up -d --build
+
+# 查看状态
+docker compose ps
 ```
 
-3. 访问系统
-- 前端地址: http://localhost:3000
-- 后端API: http://localhost:9000
-- 默认账号: admin / admin123 (首次登录后请修改密码)
+## 🛠️ 开发环境
 
-### 开发环境
+### 前端开发
 
-**前端开发**
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-**后端开发**
+访问 http://localhost:5173
+
+### 后端开发
+
 ```bash
 cd backend
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
+
+# 创建环境配置
+cat > .env << EOF
+MYSQL_HOST=localhost
+MYSQL_PORT=3307
+MYSQL_USER=app_user
+MYSQL_PASSWORD=your_password
+MYSQL_DATABASE=account_permission
+JWT_SECRET_KEY=your-secret-key
+JWT_EXPIRE_MINUTES=480
+EOF
+
+# 启动服务
 uvicorn app.main:app --reload --port 9000
 ```
 
-## 项目结构
+访问 http://localhost:9000/docs 查看 API 文档
+
+## 📁 项目结构
 
 ```
 account-permission-platform/
@@ -97,15 +129,14 @@ account-permission-platform/
 │   │   ├── api/                # API 接口
 │   │   ├── components/         # 公共组件
 │   │   ├── router/             # 路由配置
-│   │   ├── views/              # 页面视图
-│   │   │   ├── Dashboard/      # 工作台
-│   │   │   ├── Personnel/      # 人员管理
-│   │   │   ├── Systems/        # 系统管理
-│   │   │   ├── Accounts/       # 账号管理
-│   │   │   ├── PersonnelAccounts/  # 人员台账
-│   │   │   ├── SystemPersonnel/    # 系统台账
-│   │   │   └── AuditLogs/      # 审计日志
-│   │   └── main.ts
+│   │   └── views/              # 页面视图
+│   │       ├── Dashboard/      # 工作台
+│   │       ├── Personnel/      # 人员管理
+│   │       ├── Systems/        # 系统管理
+│   │       ├── Accounts/       # 账号管理
+│   │       ├── PersonnelAccounts/  # 人员台账
+│   │       ├── SystemPersonnel/    # 系统台账
+│   │       └── AuditLogs/      # 审计日志
 │   └── package.json
 ├── backend/                     # 后端项目
 │   ├── app/
@@ -116,121 +147,128 @@ account-permission-platform/
 │   │   └── services/           # 业务服务
 │   └── requirements.txt
 ├── docker-compose.yml           # Docker 编排
+├── deploy.sh                    # Ubuntu 部署脚本
 └── README.md
 ```
 
-## API 接口
+## 📡 API 接口
 
-### 认证相关
-- `POST /api/auth/login` - 用户登录
-- `POST /api/auth/change-password` - 修改密码
-- `GET /api/auth/me` - 获取当前用户
+| 模块 | 接口 | 说明 |
+|------|------|------|
+| 认证 | `POST /api/auth/login` | 用户登录 |
+| 认证 | `POST /api/auth/change-password` | 修改密码 |
+| 人员 | `GET /api/personnel` | 人员列表 |
+| 人员 | `POST /api/personnel` | 创建人员 |
+| 人员 | `POST /api/personnel/{id}/resign` | 离职处理 |
+| 系统 | `GET /api/systems` | 系统列表 |
+| 系统 | `POST /api/systems` | 创建系统 |
+| 账号 | `GET /api/accounts` | 账号列表 |
+| 账号 | `POST /api/accounts` | 创建账号 |
+| 关系 | `POST /api/relations/bind-account` | 绑定人员账号 |
+| 关系 | `POST /api/relations/unbind-account` | 解绑人员账号 |
+| 统计 | `GET /api/dashboard/stats` | 工作台统计 |
 
-### 人员管理
-- `GET /api/personnel` - 人员列表
-- `POST /api/personnel` - 创建人员
-- `PUT /api/personnel/{id}` - 更新人员
-- `DELETE /api/personnel/{id}` - 删除人员
-- `POST /api/personnel/{id}/resign` - 离职处理
+## ⚙️ 环境变量
 
-### 系统管理
-- `GET /api/systems` - 系统列表
-- `POST /api/systems` - 创建系统
-- `PUT /api/systems/{id}` - 更新系统
-- `DELETE /api/systems/{id}` - 删除系统
+| 变量名 | 说明 | 默认值 |
+|--------|------|--------|
+| `MYSQL_HOST` | MySQL 主机 | mysql |
+| `MYSQL_PORT` | MySQL 端口 | 3306 |
+| `MYSQL_USER` | MySQL 用户名 | app_user |
+| `MYSQL_PASSWORD` | MySQL 密码 | - |
+| `MYSQL_DATABASE` | 数据库名 | account_permission |
+| `JWT_SECRET_KEY` | JWT 密钥 | - |
+| `JWT_EXPIRE_MINUTES` | Token 过期时间(分钟) | 480 |
 
-### 账号管理
-- `GET /api/accounts` - 账号列表
-- `POST /api/accounts` - 创建账号
-- `PUT /api/accounts/{id}` - 更新账号
-- `DELETE /api/accounts/{id}` - 删除账号
+## 📊 数据备份
 
-### 关系管理
-- `POST /api/relations/bind-account` - 绑定人员账号
-- `POST /api/relations/unbind-account` - 解绑人员账号
-
-### 统计查询
-- `GET /api/dashboard/stats` - 工作台统计
-- `GET /api/dashboard/departments` - 部门列表
-
-## 配置说明
-
-### 环境变量
-
-**后端配置 (backend/.env)**
-```env
-MYSQL_HOST=localhost
-MYSQL_PORT=3307
-MYSQL_USER=your_username
-MYSQL_PASSWORD=your_password
-MYSQL_DATABASE=account_permission
-JWT_SECRET_KEY=your-secret-key
-JWT_EXPIRE_MINUTES=480
-```
-
-**Docker Compose 配置**
-- 前端端口: 3000
-- 后端端口: 9000
-- MySQL端口: 3307
-
-## 使用说明
-
-### 1. 人员管理
-- 录入员工信息（姓名、工号、部门、职位等）
-- 支持按部门、状态筛选
-- 离职处理自动解绑关联账号
-
-### 2. 系统管理
-- 登记业务系统信息
-- 支持按名称搜索
-- 查看系统关联人员
-
-### 3. 账号管理
-- 创建系统账号
-- 绑定到具体人员
-- 支持多种账号类型（普通/管理员/服务/共享）
-
-### 4. 台账查询
-- **人员台账**: 选择人员查看其所有关联账号
-- **系统台账**: 选择系统查看其所有关联人员和账号
-
-### 5. 工作台
-- 查看整体统计数据
-- 部门人员分布
-- 最近操作记录
-
-## 数据备份
-
-### 备份数据库
 ```bash
-docker exec security-dashboard-v2 mysqldump -u your_username -p account_permission > backup.sql
+# 备份数据库
+docker exec account-permission-platform-mysql-1 mysqldump -u app_user -p account_permission > backup_$(date +%Y%m%d).sql
+
+# 恢复数据库
+docker exec -i account-permission-platform-mysql-1 mysql -u app_user -p account_permission < backup.sql
 ```
 
-### 恢复数据库
+## 🔧 常用命令
+
 ```bash
-docker exec -i security-dashboard-v2 mysql -u your_username -p account_permission < backup.sql
+# 查看服务状态
+docker compose ps
+
+# 查看日志
+docker compose logs -f
+
+# 重启服务
+docker compose restart
+
+# 停止服务
+docker compose down
+
+# 更新并重启
+git pull
+docker compose up -d --build
 ```
 
-## 常见问题
+## ❓ 常见问题
 
-### Q: 忘记密码怎么办？
-A: 目前只能通过数据库直接修改密码哈希值，或重新初始化数据库。
+### Q: 忘记管理员密码怎么办？
 
-### Q: 如何批量导入人员？
-A: 目前暂不支持批量导入，需要通过界面逐条录入。
+```bash
+# 进入后端容器
+docker exec -it account-permission-platform-backend-1 bash
 
-### Q: 离职处理后能恢复吗？
-A: 离职处理会自动解绑账号，解绑后需要手动重新绑定。
+# 运行密码重置脚本
+python3 -c "
+from app.core.security import get_password_hash
+from app.models.base import SessionLocal
+from app.models.user import User
 
-## 更新日志
+db = SessionLocal()
+user = db.query(User).filter(User.username == 'admin').first()
+if user:
+    user.password_hash = get_password_hash('admin123')
+    db.commit()
+    print('密码已重置为: admin123')
+db.close()
+"
+```
 
-### v1.0.0 (2026-09-01)
-- 初始版本发布
-- 人员、系统、账号管理
-- 人员台账、系统台账
-- 离职自动处理
-- 工作台统计
+### Q: 如何修改端口？
 
-## 许可证
+编辑 `docker-compose.yml` 文件，修改端口映射：
 
-MIT License
+```yaml
+services:
+  frontend:
+    ports:
+      - "8080:80"  # 改为你想要的端口
+  backend:
+    ports:
+      - "9001:9000"  # 改为你想要的端口
+```
+
+### Q: 如何查看数据库？
+
+```bash
+# 进入 MySQL 容器
+docker exec -it account-permission-platform-mysql-1 mysql -u app_user -p account_permission
+
+# 查看表
+SHOW TABLES;
+
+# 查看人员
+SELECT * FROM personnel;
+```
+
+## 📄 许可证
+
+[MIT License](LICENSE)
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+## 📧 联系方式
+
+如有问题，请提交 Issue 或联系维护者。
