@@ -1,8 +1,10 @@
 """
 Accounts API
 """
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, UploadFile, File
 from sqlalchemy.orm import Session
+import csv
+import io
 
 from app.models.base import get_db
 from app.models.user import User
@@ -171,3 +173,126 @@ async def get_account_permissions(
                 "granted_by": link.granted_by,
             })
     return Response(data=result)
+
+
+@router.post("/import", response_model=Response)
+async def import_accounts(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """批量导入账号 (CSV格式: 账号名,系统名称,账号类型,备注)"""
+    if not file.filename.endswith('.csv'):
+        return Response(code=400, msg="请上传 CSV 文件")
+
+    try:
+        content = await file.read()
+        # Try different encodings
+        for encoding in ['utf-8-sig', 'utf-8', 'gbk', 'gb2312']:
+            try:
+                text = content.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            return Response(code=400, msg="文件编码无法识别，请使用 UTF-8 编码")
+
+        reader = csv.reader(io.StringIO(text))
+        header = next(reader, None)
+        if not header:
+            return Response(code=400, msg="文件为空")
+
+        # Get all systems for mapping
+        systems = {s.name: s for s in db.query(System).all()}
+
+        success_count = 0
+        fail_count = 0
+        errors = []
+
+        for i, row in enumerate(reader, start=2):
+            if len(row) < 2:
+                errors.append(f"第{i}行: 数据不完整")
+                fail_count += 1
+                continue
+
+            username = row[0].strip()
+            system_name = row[1].strip()
+            account_type = row[2].strip() if len(row) > 2 and row[2].strip() else "normal"
+            remark = row[3].strip() if len(row) > 3 else ""
+
+            if not username or not system_name:
+                errors.append(f"第{i}行: 账号名或系统名称为空")
+                fail_count += 1
+                continue
+
+            system = systems.get(system_name)
+            if not system:
+                errors.append(f"第{i}行: 系统 '{system_name}' 不存在")
+                fail_count += 1
+                continue
+
+            # Check duplicate
+            exists = db.query(Account).filter(
+                Account.username == username,
+                Account.system_id == system.id
+            ).first()
+            if exists:
+                errors.append(f"第{i}行: 账号 '{username}' 在系统 '{system_name}' 中已存在")
+                fail_count += 1
+                continue
+
+            # Validate account_type
+            valid_types = ['normal', 'admin', 'service', 'shared']
+            if account_type not in valid_types:
+                errors.append(f"第{i}行: 账号类型 '{account_type}' 无效，可选: {', '.join(valid_types)}")
+                fail_count += 1
+                continue
+
+            account = Account(
+                username=username,
+                system_id=system.id,
+                account_type=account_type,
+                status="active",
+                remark=remark,
+            )
+            db.add(account)
+            success_count += 1
+
+        db.commit()
+
+        # Audit log
+        record_audit_log(
+            db, current_user.username, "import", "account", 0, "",
+            f"批量导入账号: 成功 {success_count} 个, 失败 {fail_count} 个"
+        )
+
+        msg = f"导入完成: 成功 {success_count} 个"
+        if fail_count > 0:
+            msg += f", 失败 {fail_count} 个"
+
+        return Response(msg=msg, data={
+            "success": success_count,
+            "fail": fail_count,
+            "errors": errors[:20],  # Only return first 20 errors
+        })
+
+    except Exception as e:
+        return Response(code=500, msg=f"导入失败: {str(e)}")
+
+
+@router.get("/template/download", response_model=Response)
+async def download_template(
+    current_user: User = Depends(get_current_user),
+):
+    """下载导入模板"""
+    return Response(data={
+        "filename": "账号导入模板.csv",
+        "content": "账号名,系统名称,账号类型,备注\n示例用户,OA系统,normal,示例备注\n",
+        "headers": ["账号名", "系统名称", "账号类型", "备注"],
+        "tips": [
+            "账号名: 必填，账号的登录名称",
+            "系统名称: 必填，必须是已存在的系统名称",
+            "账号类型: 可选，normal/admin/service/shared，默认 normal",
+            "备注: 可选",
+        ]
+    })

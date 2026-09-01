@@ -79,6 +79,7 @@ export const accountsApi = {
   update: (id: number, data: any) => request.put(`/accounts/${id}`, data),
   delete: (id: number) => request.delete(`/accounts/${id}`),
   getPermissions: (id: number) => request.get(`/accounts/${id}/permissions`),
+  import: (data: FormData) => request.post('/accounts/import', data, { headers: { 'Content-Type': 'multipart/form-data' } }),
 }
 
 // ==================== Permissions ====================

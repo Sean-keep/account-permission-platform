@@ -2,7 +2,10 @@
   <div>
     <div class="page-header">
       <h2>账号管理</h2>
-      <el-button type="primary" @click="openDialog()">新建账号</el-button>
+      <div>
+        <el-button type="success" @click="importDialogVisible = true">批量导入</el-button>
+        <el-button type="primary" @click="openDialog()">新建账号</el-button>
+      </div>
     </div>
 
     <el-card shadow="never" class="filter-bar">
@@ -170,12 +173,72 @@
         <el-button type="primary" :loading="submitting" @click="handleBindPersonnel">绑定</el-button>
       </template>
     </el-dialog>
+
+    <!-- Import Dialog -->
+    <el-dialog v-model="importDialogVisible" title="批量导入账号" width="600px" destroy-on-close>
+      <div style="margin-bottom: 16px">
+        <el-alert type="info" :closable="false">
+          <template #title>
+            <div>CSV 文件格式要求：</div>
+            <div style="margin-top: 8px; font-size: 13px">
+              <div>• 第一行为表头，数据从第二行开始</div>
+              <div>• 列顺序：账号名, 系统名称, 账号类型, 备注</div>
+              <div>• 账号名和系统名称为必填项</div>
+              <div>• 账号类型可选：normal/admin/service/shared，默认 normal</div>
+              <div>• 系统名称必须是已存在的系统</div>
+            </div>
+          </template>
+        </el-alert>
+      </div>
+
+      <div style="margin-bottom: 16px">
+        <el-button type="primary" link @click="downloadTemplate">
+          <el-icon><Download /></el-icon>
+          下载导入模板
+        </el-button>
+      </div>
+
+      <el-upload
+        ref="uploadRef"
+        :auto-upload="false"
+        :limit="1"
+        accept=".csv"
+        :on-change="handleFileChange"
+        :on-exceed="() => ElMessage.warning('只能上传一个文件')"
+        drag
+      >
+        <el-icon size="40"><Upload /></el-icon>
+        <div style="margin-top: 8px">将 CSV 文件拖到此处，或<em>点击上传</em></div>
+      </el-upload>
+
+      <div v-if="importResult" style="margin-top: 16px">
+        <el-alert
+          :type="importResult.fail > 0 ? 'warning' : 'success'"
+          :closable="false"
+        >
+          <template #title>
+            <div>导入完成：成功 {{ importResult.success }} 个，失败 {{ importResult.fail }} 个</div>
+          </template>
+        </el-alert>
+        <div v-if="importResult.errors?.length" style="margin-top: 8px; max-height: 150px; overflow-y: auto">
+          <div v-for="(err, idx) in importResult.errors" :key="idx" style="color: #f56c6c; font-size: 13px; margin-bottom: 4px">
+            {{ err }}
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="importing" @click="handleImport">开始导入</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Download, Upload } from '@element-plus/icons-vue'
 import { accountsApi, systemsApi, permissionsApi, relationsApi, personnelApi } from '../../api'
 
 const loading = ref(false)
@@ -186,6 +249,8 @@ const dialogVisible = ref(false)
 const permVisible = ref(false)
 const grantPermVisible = ref(false)
 const bindPersonnelVisible = ref(false)
+const importDialogVisible = ref(false)
+const importing = ref(false)
 const isEdit = ref(false)
 const editId = ref(0)
 const currentAccountId = ref(0)
@@ -194,6 +259,8 @@ const accountPerms = ref<any[]>([])
 const systemOptions = ref<any[]>([])
 const permOptions = ref<any[]>([])
 const personnelOptions = ref<any[]>([])
+const importFile = ref<File | null>(null)
+const importResult = ref<any>(null)
 
 const filter = reactive({ keyword: '', system_id: 0, status: '' })
 const pagination = reactive({ page: 1, page_size: 20 })
@@ -359,6 +426,39 @@ const handleBindPersonnel = async () => {
     ElMessage.success('绑定成功')
     bindPersonnelVisible.value = false
   } catch (e) {} finally { submitting.value = false }
+}
+
+const handleFileChange = (file: any) => {
+  importFile.value = file.raw
+  importResult.value = null
+}
+
+const downloadTemplate = () => {
+  const csvContent = '账号名,系统名称,账号类型,备注\n示例用户,OA系统,normal,示例备注\n'
+  const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = '账号导入模板.csv'
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+const handleImport = async () => {
+  if (!importFile.value) {
+    ElMessage.warning('请选择要导入的文件')
+    return
+  }
+  importing.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', importFile.value)
+    const res: any = await accountsApi.import(formData)
+    importResult.value = res.data
+    if (res.data?.success > 0) {
+      loadData()
+    }
+  } catch (e) {} finally { importing.value = false }
 }
 
 onMounted(() => {
