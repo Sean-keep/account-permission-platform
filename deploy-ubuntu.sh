@@ -208,47 +208,78 @@ install_python() {
     }
 }
 
-# 安装 Node.js
+# 安装 Node.js 22+（Vite 8 需要）
 install_nodejs() {
     step "检查 Node.js..."
+
+    # 项目需要 Node.js >= 22（Vite 8 + TypeScript 6）
+    local REQUIRED_NODE_MAJOR=22
 
     # 检查已有版本
     if command -v node &> /dev/null; then
         local ver=$(node --version 2>/dev/null)
         local major=$(echo $ver | sed 's/v//' | cut -d. -f1)
-        if [ "$major" -ge 16 ]; then
+        if [ "$major" -ge $REQUIRED_NODE_MAJOR ]; then
             info "Node.js 已安装: $ver"
             return 0
         else
-            warn "Node.js 版本过低 ($ver)，需要 >= 16"
+            warn "Node.js 版本过低 ($ver)，需要 >= ${REQUIRED_NODE_MAJOR}"
+            warn "正在升级 Node.js..."
         fi
     fi
 
-    info "正在安装 Node.js..."
+    info "正在安装 Node.js ${REQUIRED_NODE_MAJOR}..."
 
-    # 尝试多种安装方式
-    # 方式1: NodeSource
-    if curl -fsSL https://deb.nodesource.com/setup_18.x -o /tmp/setup_node.sh 2>/dev/null; then
+    # 方式1: NodeSource（推荐）
+    if curl -fsSL https://deb.nodesource.com/setup_${REQUIRED_NODE_MAJOR}.x -o /tmp/setup_node.sh 2>/dev/null; then
         bash /tmp/setup_node.sh 2>/dev/null
         apt-get install -y nodejs 2>/dev/null
     fi
 
-    # 方式2: Ubuntu 默认源
-    if ! command -v node &> /dev/null; then
-        warn "NodeSource 安装失败，尝试 Ubuntu 默认源..."
-        apt-get install -y nodejs npm 2>/dev/null
+    # 方式2: 使用 nvm 安装
+    if ! command -v node &> /dev/null || [ "$(node -v | sed 's/v//' | cut -d. -f1)" -lt "$REQUIRED_NODE_MAJOR" ]; then
+        warn "NodeSource 安装失败，尝试使用 nvm..."
+        export NVM_DIR="$HOME/.nvm"
+        if [ ! -d "$NVM_DIR" ]; then
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash 2>/dev/null
+        fi
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+        nvm install ${REQUIRED_NODE_MAJOR} 2>/dev/null
+        nvm use ${REQUIRED_NODE_MAJOR} 2>/dev/null
+        # 创建全局链接
+        ln -sf "$NVM_DIR/versions/node/v$(nvm version)/bin/node" /usr/local/bin/node 2>/dev/null
+        ln -sf "$NVM_DIR/versions/node/v$(nvm version)/bin/npm" /usr/local/bin/npm 2>/dev/null
+        ln -sf "$NVM_DIR/versions/node/v$(nvm version)/bin/npx" /usr/local/bin/npx 2>/dev/null
     fi
 
-    # 方式3: snap
-    if ! command -v node &> /dev/null && command -v snap &> /dev/null; then
-        warn "apt 安装失败，尝试 snap..."
-        snap install node --classic 2>/dev/null
+    # 方式3: 直接下载二进制
+    if ! command -v node &> /dev/null || [ "$(node -v | sed 's/v//' | cut -d. -f1)" -lt "$REQUIRED_NODE_MAJOR" ]; then
+        warn "nvm 安装失败，尝试直接下载二进制..."
+        local NODE_VERSION="v22.16.0"
+        local NODE_ARCH="linux-x64"
+        if [ "$(uname -m)" = "aarch64" ]; then
+            NODE_ARCH="linux-arm64"
+        fi
+        curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-${NODE_ARCH}.tar.xz" -o /tmp/node.tar.xz 2>/dev/null
+        if [ -f /tmp/node.tar.xz ]; then
+            tar -xf /tmp/node.tar.xz -C /usr/local --strip-components=1 2>/dev/null
+            rm -f /tmp/node.tar.xz
+        fi
     fi
 
     if command -v node &> /dev/null; then
-        info "Node.js 安装完成: $(node --version)"
+        local ver=$(node --version)
+        local major=$(echo $ver | sed 's/v//' | cut -d. -f1)
+        if [ "$major" -ge $REQUIRED_NODE_MAJOR ]; then
+            info "Node.js 安装完成: $ver"
+        else
+            error "Node.js 版本仍然过低: $ver，需要 >= ${REQUIRED_NODE_MAJOR}"
+            error "请手动安装: https://nodejs.org/"
+            return 1
+        fi
     else
-        error "Node.js 安装失败，请手动安装"
+        error "Node.js 安装失败，请手动安装 Node.js >= ${REQUIRED_NODE_MAJOR}"
+        error "下载地址: https://nodejs.org/"
         return 1
     fi
 }
