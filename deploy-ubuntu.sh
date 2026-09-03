@@ -485,7 +485,7 @@ build_frontend() {
     cd ${PROJECT_DIR}/frontend || {
         error "前端目录不存在"
         return 1
-    fi
+    }
 
     # 检查是否需要重新构建
     if [ -d "dist" ] && [ -f "dist/index.html" ]; then
