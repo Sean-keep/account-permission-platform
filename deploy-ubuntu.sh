@@ -285,18 +285,18 @@ deploy_project() {
     mkdir -p ${PROJECT_DIR}/backend
     mkdir -p ${PROJECT_DIR}/frontend
 
-    # 备份现有 .env
+    # 备份现有 .env（目标目录）
     local env_backup=""
     if [ -f "${PROJECT_DIR}/backend/.env" ]; then
         env_backup=$(cat "${PROJECT_DIR}/backend/.env")
-        info "已备份现有 .env 配置"
+        info "已备份目标目录 .env"
     fi
 
-    # 备份现有 venv
-    local has_venv=false
-    if [ -d "${PROJECT_DIR}/backend/venv" ] && [ -f "${PROJECT_DIR}/backend/venv/bin/uvicorn" ]; then
-        has_venv=true
-        info "检测到现有虚拟环境，将保留"
+    # 检查当前目录是否有 .env（用户配置的）
+    local source_env=""
+    if [ -f "./backend/.env" ]; then
+        source_env=$(cat "./backend/.env")
+        info "检测到当前目录 .env 配置"
     fi
 
     # 复制项目文件
@@ -326,10 +326,15 @@ deploy_project() {
         return 1
     fi
 
-    # 恢复 .env
-    if [ -n "$env_backup" ]; then
+    # 恢复 .env（优先使用当前目录的，其次使用备份的）
+    if [ -n "$source_env" ]; then
+        echo "$source_env" > "${PROJECT_DIR}/backend/.env"
+        info "✅ 使用当前目录 .env 配置"
+    elif [ -n "$env_backup" ]; then
         echo "$env_backup" > "${PROJECT_DIR}/backend/.env"
-        info "已恢复 .env 配置"
+        info "✅ 恢复备份的 .env 配置"
+    else
+        info "未检测到 .env 配置，稍后将创建默认配置"
     fi
 
     info "项目文件部署完成"
