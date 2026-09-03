@@ -4,6 +4,7 @@
   <img src="https://img.shields.io/badge/Vue-3.x-blue" alt="Vue 3">
   <img src="https://img.shields.io/badge/FastAPI-0.100+-green" alt="FastAPI">
   <img src="https://img.shields.io/badge/MySQL-8.0-orange" alt="MySQL 8">
+  <img src="https://img.shields.io/badge/Node.js-22+-brightgreen" alt="Node.js">
   <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License">
 </p>
 
@@ -26,7 +27,6 @@
 ### 🖥️ 系统管理
 - 业务系统登记和维护
 - 查看系统关联人员
-- 支持按名称搜索
 
 ### 🔑 账号管理
 - 系统账号创建和维护
@@ -47,107 +47,122 @@
 
 | 层级 | 技术 |
 |------|------|
-| 前端 | Vue 3 + TypeScript + Element Plus + ECharts |
+| 前端 | Vue 3 + TypeScript + Element Plus + Vite 8 |
 | 后端 | FastAPI + SQLAlchemy + Pydantic |
-| 数据库 | MySQL 8.0 |
+| 数据库 | MySQL 8.0 / MariaDB |
 | 认证 | JWT + bcrypt |
-| 部署 | Nginx + systemd |
+| 部署 | Nginx + systemd（或直接进程管理） |
 
----
-
-## 🚀 部署方式
-
-### 方式一：Ubuntu 一键脚本部署（推荐）
-
-适用于全新 Ubuntu 服务器，自动完成环境安装、数据库配置、服务部署。
-
-#### 环境要求
+### 环境要求
 
 | 组件 | 版本要求 |
 |------|----------|
-| 操作系统 | Ubuntu 20.04 / 22.04 / 24.04 |
-| Python | ≥ 3.10（脚本自动安装） |
-| Node.js | ≥ 18（脚本自动安装） |
-| MySQL | ≥ 8.0（脚本自动安装） |
-| Nginx | 脚本自动安装 |
+| Python | >= 3.10 |
+| Node.js | >= 22 |
+| MySQL | >= 8.0（或 MariaDB >= 10.5） |
+| Nginx | >= 1.18 |
 
-#### 部署步骤
+---
+
+## 🚀 快速部署
+
+### 方式一：Ubuntu 一键脚本部署（推荐）
+
+#### 环境准备
+
+确保服务器可以访问外网，然后执行：
 
 ```bash
-# 1. 克隆项目
+# 克隆项目
 git clone https://github.com/Sean-keep/account-permission-platform.git
 cd account-permission-platform
 
-# 2. 执行部署脚本
+# 执行部署脚本
 chmod +x deploy-ubuntu.sh
 sudo ./deploy-ubuntu.sh
 ```
 
-部署脚本将自动完成：
-1. 安装 Python 3、Node.js 18、MySQL 8.0、Nginx
-2. 创建数据库和用户
-3. 构建前端项目
-4. 配置 Python 虚拟环境并安装依赖
-5. 初始化数据库表
-6. 创建 systemd 服务（前端构建、后端 API）
-7. 配置 Nginx 反向代理
-8. 启动所有服务
+#### 脚本功能
+
+部署脚本会自动完成以下操作：
+
+1. ✅ 安装 Python 3、Node.js 22、Nginx
+2. ✅ 安装 MySQL（或使用外部数据库）
+3. ✅ 创建数据库和用户
+4. ✅ 构建前端项目
+5. ✅ 配置 Python 虚拟环境
+6. ✅ 启动后端服务
+7. ✅ 配置 Nginx 反向代理
+
+#### 使用外部数据库
+
+如果需要使用外部数据库，在运行脚本前先创建配置文件：
+
+```bash
+# 创建 .env 文件
+cat > backend/.env << 'EOF'
+MYSQL_HOST=你的数据库IP
+MYSQL_PORT=3306
+MYSQL_USER=你的数据库用户
+MYSQL_PASSWORD=你的数据库密码
+MYSQL_DATABASE=account_permission
+JWT_SECRET_KEY=你的JWT密钥至少32位
+JWT_EXPIRE_MINUTES=480
+EOF
+```
+
+然后在外部数据库执行初始化：
+
+```sql
+CREATE DATABASE account_permission DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER '你的用户'@'%' IDENTIFIED BY '你的密码';
+GRANT ALL PRIVILEGES ON account_permission.* TO '你的用户'@'%';
+FLUSH PRIVILEGES;
+```
+
+再运行部署脚本：
+
+```bash
+sudo ./deploy-ubuntu.sh
+```
+
+脚本会自动检测 `.env` 配置，跳过 MySQL 安装。
+
+#### 部署完成
 
 部署完成后访问：
 - 前端地址: `http://你的服务器IP`
-- 后端 API: `http://你的服务器IP/api`
 - 默认账号: `admin / admin123`
 
 ---
 
-### 方式二：Ubuntu 手动部署
+### 方式二：手动部署
 
-适用于需要自定义配置或已有环境的服务器。
-
-#### 2.1 环境要求
-
-| 组件 | 版本要求 |
-|------|----------|
-| Python | ≥ 3.10 |
-| Node.js | ≥ 18 |
-| MySQL | ≥ 8.0 |
-| Nginx | ≥ 1.18 |
-
-#### 2.2 安装系统依赖
+#### 2.1 安装系统依赖
 
 ```bash
-# 更新系统
-sudo apt update && sudo apt upgrade -y
-
-# 安装 Python 3 和 pip
+# Ubuntu 22.04/24.04
+sudo apt update
 sudo apt install -y python3 python3-pip python3-venv python3-dev
-
-# 安装 Node.js 18（如未安装）
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt install -y nodejs
-
-# 安装 MySQL 8.0
-sudo apt install -y mysql-server mysql-client
-
-# 安装 Nginx
 sudo apt install -y nginx
 
-# 安装构建工具
-sudo apt install -y build-essential libssl-dev libffi-dev
+# 安装 Node.js 22
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# 安装 MySQL
+sudo apt install -y mysql-server mysql-client
 ```
 
-#### 2.3 配置 MySQL
+#### 2.2 配置 MySQL
 
 ```bash
 # 启动 MySQL
 sudo systemctl start mysql
 sudo systemctl enable mysql
 
-# 安全初始化（设置 root 密码等）
-sudo mysql_secure_installation
-
 # 创建数据库和用户
-sudo mysql -u root -p << EOF
+sudo mysql -u root << EOF
 CREATE DATABASE account_permission DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER 'app_user'@'localhost' IDENTIFIED BY 'your_password';
 GRANT ALL PRIVILEGES ON account_permission.* TO 'app_user'@'localhost';
@@ -155,11 +170,16 @@ FLUSH PRIVILEGES;
 EOF
 ```
 
-#### 2.4 部署后端
+#### 2.3 部署后端
 
 ```bash
+# 复制项目到目标目录
+sudo mkdir -p /opt/account-permission-platform
+sudo cp -r backend /opt/account-permission-platform/
+sudo cp -r frontend /opt/account-permission-platform/
+
 # 进入后端目录
-cd /path/to/account-permission-platform/backend
+cd /opt/account-permission-platform/backend
 
 # 创建虚拟环境
 python3 -m venv venv
@@ -178,14 +198,6 @@ MYSQL_DATABASE=account_permission
 JWT_SECRET_KEY=$(openssl rand -base64 32)
 JWT_EXPIRE_MINUTES=480
 EOF
-
-# 初始化数据库表
-python3 -c "
-from app.models.base import Base, engine
-from app.models import user, personnel, system, account, audit_log
-Base.metadata.create_all(bind=engine)
-print('数据库表初始化完成')
-"
 
 # 创建 systemd 服务
 sudo tee /etc/systemd/system/account-permission-backend.service << EOF
@@ -212,23 +224,25 @@ sudo systemctl enable account-permission-backend
 sudo systemctl start account-permission-backend
 ```
 
-#### 2.5 部署前端
+#### 2.4 部署前端
 
 ```bash
-# 进入前端目录
-cd /path/to/account-permission-platform/frontend
+cd /opt/account-permission-platform/frontend
 
 # 安装依赖
-npm install
+npm install --legacy-peer-deps
 
-# 构建生产版本
+# 构建
 npm run build
 
-# 复制构建产物到 Nginx 目录
+# 复制到 Nginx 目录
 sudo mkdir -p /var/www/account-permission
 sudo cp -r dist/* /var/www/account-permission/
+```
 
-# 配置 Nginx
+#### 2.5 配置 Nginx
+
+```bash
 sudo tee /etc/nginx/sites-available/account-permission << EOF
 server {
     listen 80;
@@ -237,18 +251,15 @@ server {
     root /var/www/account-permission;
     index index.html;
 
-    # 前端路由（Vue Router history 模式）
     location / {
         try_files \$uri \$uri/ /index.html;
     }
 
-    # 静态资源缓存
     location ~* \.(js|mjs|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
     }
 
-    # API 反向代理到后端
     location /api/ {
         proxy_pass http://127.0.0.1:9000/api/;
         proxy_set_header Host \$host;
@@ -261,38 +272,26 @@ server {
 }
 EOF
 
-# 启用站点
 sudo ln -sf /etc/nginx/sites-available/account-permission /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
-
-# 测试并重启 Nginx
 sudo nginx -t && sudo systemctl restart nginx
 ```
 
 #### 2.6 验证部署
 
 ```bash
-# 检查后端服务状态
-sudo systemctl status account-permission-backend
+# 检查后端
+curl http://localhost:9000/api/health
 
-# 检查 Nginx 状态
-sudo systemctl status nginx
-
-# 测试 API
-curl http://localhost:9000/api/auth/login -X POST -H "Content-Type: application/json" -d '{"username":"admin","password":"admin123"}'
-
-# 测试前端
-curl -I http://localhost/
+# 测试登录
+curl http://localhost/api/auth/login -X POST -H "Content-Type: application/json" -d '{"username":"admin","password":"admin123"}'
 ```
 
 ---
 
 ### 方式三：Docker Compose 部署
 
-适用于快速体验或开发环境。
-
 ```bash
-# 克隆项目
 git clone https://github.com/Sean-keep/account-permission-platform.git
 cd account-permission-platform
 
@@ -307,17 +306,9 @@ JWT_SECRET_KEY=$(openssl rand -base64 32)
 JWT_EXPIRE_MINUTES=480
 EOF
 
-# 启动服务
+# 启动
 docker compose up -d --build
-
-# 查看状态
-docker compose ps
 ```
-
-部署完成后访问：
-- 前端地址: `http://localhost:3000`
-- 后端 API: `http://localhost:9000`
-- 默认账号: `admin / admin123`
 
 ---
 
@@ -338,7 +329,6 @@ account-permission-platform/
 │   │       ├── PersonnelAccounts/  # 人员台账
 │   │       ├── SystemPersonnel/    # 系统台账
 │   │       └── AuditLogs/      # 审计日志
-│   ├── nginx.conf              # Nginx 配置参考
 │   └── package.json
 ├── backend/                     # 后端项目
 │   ├── app/
@@ -347,10 +337,8 @@ account-permission-platform/
 │   │   ├── models/             # 数据模型
 │   │   ├── schemas/            # 数据验证
 │   │   └── services/           # 业务服务
-│   ├── requirements.txt
-│   └── Dockerfile
-├── deploy.sh                    # Docker 部署脚本
-├── deploy-ubuntu.sh             # Ubuntu 一键部署脚本（无 Docker）
+│   └── requirements.txt
+├── deploy-ubuntu.sh             # Ubuntu 一键部署脚本
 ├── docker-compose.yml           # Docker 编排
 └── README.md
 ```
@@ -363,17 +351,11 @@ account-permission-platform/
 |------|------|------|------|
 | 认证 | `/api/auth/login` | POST | 用户登录 |
 | 认证 | `/api/auth/change-password` | POST | 修改密码 |
-| 人员 | `/api/personnel` | GET | 人员列表 |
-| 人员 | `/api/personnel` | POST | 创建人员 |
-| 人员 | `/api/personnel/{id}` | PUT | 更新人员 |
-| 人员 | `/api/personnel/{id}` | DELETE | 删除人员 |
+| 人员 | `/api/personnel` | GET/POST | 人员列表/创建 |
+| 人员 | `/api/personnel/{id}` | PUT/DELETE | 更新/删除 |
 | 人员 | `/api/personnel/{id}/resign` | POST | 离职处理 |
-| 系统 | `/api/systems` | GET | 系统列表 |
-| 系统 | `/api/systems` | POST | 创建系统 |
-| 系统 | `/api/systems/{id}` | PUT | 更新系统 |
-| 账号 | `/api/accounts` | GET | 账号列表 |
-| 账号 | `/api/accounts` | POST | 创建账号 |
-| 账号 | `/api/accounts/{id}` | PUT | 更新账号 |
+| 系统 | `/api/systems` | GET/POST | 系统列表/创建 |
+| 账号 | `/api/accounts` | GET/POST | 账号列表/创建 |
 | 关系 | `/api/relations/bind-account` | POST | 绑定人员账号 |
 | 关系 | `/api/relations/unbind-account` | POST | 解绑人员账号 |
 | 台账 | `/api/ledgers/personnel/{id}` | GET | 人员台账 |
@@ -381,88 +363,60 @@ account-permission-platform/
 | 统计 | `/api/dashboard/stats` | GET | 工作台统计 |
 | 审计 | `/api/audit-logs` | GET | 审计日志 |
 
-启动后访问 API 文档：`http://localhost:9000/docs`
+API 文档：`http://your-server:9000/docs`
 
 ---
 
 ## ⚙️ 环境变量
 
-| 变量名 | 说明 | 默认值 |
-|--------|------|--------|
-| `MYSQL_HOST` | MySQL 主机 | `localhost` |
+在 `backend/.env` 中配置：
+
+| 变量名 | 说明 | 示例 |
+|--------|------|------|
+| `MYSQL_HOST` | MySQL 主机 | `localhost` 或 `192.168.1.100` |
 | `MYSQL_PORT` | MySQL 端口 | `3306` |
 | `MYSQL_USER` | MySQL 用户名 | `app_user` |
-| `MYSQL_PASSWORD` | MySQL 密码 | - |
+| `MYSQL_PASSWORD` | MySQL 密码 | `your_password` |
 | `MYSQL_DATABASE` | 数据库名 | `account_permission` |
-| `JWT_SECRET_KEY` | JWT 密钥（至少 32 字符） | - |
-| `JWT_EXPIRE_MINUTES` | Token 过期时间（分钟） | `480` |
+| `JWT_SECRET_KEY` | JWT 密钥（至少 32 字符） | 随机生成 |
+| `JWT_EXPIRE_MINUTES` | Token 过期时间 | `480` |
 
 ---
 
-## 📊 数据备份
+## 🔧 服务管理
 
-### MySQL 手动备份
-
-```bash
-# 备份数据库
-mysqldump -u app_user -p account_permission > backup_$(date +%Y%m%d).sql
-
-# 恢复数据库
-mysql -u app_user -p account_permission < backup.sql
-```
-
-### 自动备份（crontab）
+### systemd 方式
 
 ```bash
-# 编辑 crontab
-crontab -e
-
-# 添加每日凌晨 2 点备份
-0 2 * * * mysqldump -u app_user -p'your_password' account_permission > /backup/account_permission_$(date +\%Y\%m\%d).sql
-```
-
----
-
-## 🔧 常用命令
-
-### 服务管理
-
-```bash
-# 查看后端服务状态
+# 查看状态
 sudo systemctl status account-permission-backend
 
-# 重启后端服务
+# 启动/停止/重启
+sudo systemctl start account-permission-backend
+sudo systemctl stop account-permission-backend
 sudo systemctl restart account-permission-backend
 
-# 查看后端日志
+# 查看日志
 sudo journalctl -u account-permission-backend -f
-
-# 重启 Nginx
-sudo systemctl restart nginx
-
-# 查看 Nginx 日志
-sudo tail -f /var/log/nginx/access.log
-sudo tail -f /var/log/nginx/error.log
 ```
 
-### Docker 方式
+### 脚本方式（无 systemd 环境）
 
 ```bash
-# 查看服务状态
-docker compose ps
+# 启动
+/opt/account-permission-platform/start.sh start
+
+# 停止
+/opt/account-permission-platform/start.sh stop
+
+# 重启
+/opt/account-permission-platform/start.sh restart
+
+# 状态
+/opt/account-permission-platform/start.sh status
 
 # 查看日志
-docker compose logs -f
-
-# 重启服务
-docker compose restart
-
-# 停止服务
-docker compose down
-
-# 更新并重启
-git pull
-docker compose up -d --build
+tail -f /opt/account-permission-platform/backend.log
 ```
 
 ---
@@ -471,8 +425,6 @@ docker compose up -d --build
 
 ### Q: 忘记管理员密码怎么办？
 
-**Ubuntu 手动部署方式：**
-
 ```bash
 cd /opt/account-permission-platform/backend
 source venv/bin/activate
@@ -492,67 +444,50 @@ db.close()
 "
 ```
 
-**Docker 方式：**
+### Q: 如何使用外部数据库？
+
+1. 创建 `backend/.env` 文件配置数据库连接
+2. 在外部数据库创建库和用户
+3. 运行部署脚本，会自动跳过 MySQL 安装
+
+### Q: Node.js 版本过低怎么办？
 
 ```bash
-docker exec -it account-permission-platform-backend-1 bash
-python3 -c "
-from app.core.security import get_password_hash
-from app.models.base import SessionLocal
-from app.models.user import User
+# 安装 Node.js 22
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt install -y nodejs
 
-db = SessionLocal()
-user = db.query(User).filter(User.username == 'admin').first()
-if user:
-    user.password_hash = get_password_hash('admin123')
-    db.commit()
-    print('密码已重置为: admin123')
-db.close()
-"
+# 或使用 nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+source ~/.bashrc
+nvm install 22
 ```
 
-### Q: 如何修改端口？
-
-**Ubuntu 手动部署方式：**
-
-1. 修改后端端口：编辑 `/etc/systemd/system/account-permission-backend.service` 中的 `--port` 参数
-2. 修改前端端口：编辑 `/etc/nginx/sites-available/account-permission` 中的 `listen` 参数
-3. 重启服务：`sudo systemctl daemon-reload && sudo systemctl restart account-permission-backend && sudo systemctl restart nginx`
-
-### Q: 如何查看数据库？
+### Q: 前端构建失败怎么办？
 
 ```bash
-# 登录 MySQL
-mysql -u app_user -p account_permission
+cd /opt/account-permission-platform/frontend
 
-# 查看表
-SHOW TABLES;
-
-# 查看人员
-SELECT * FROM personnel;
-
-# 查看账号
-SELECT * FROM accounts;
+# 清理后重新构建
+rm -rf node_modules dist
+npm install --legacy-peer-deps
+npm run build
 ```
 
-### Q: 后端服务启动失败怎么办？
+### Q: 后端启动失败怎么办？
 
 ```bash
-# 查看详细错误日志
+# 查看日志
+cat /opt/account-permission-platform/backend.log
+
+# 或 systemd 方式
 sudo journalctl -u account-permission-backend -n 50
 
-# 手动启动测试
+# 手动测试启动
 cd /opt/account-permission-platform/backend
 source venv/bin/activate
 uvicorn app.main:app --host 0.0.0.0 --port 9000
 ```
-
-### Q: 前端页面空白怎么办？
-
-1. 检查 Nginx 配置是否正确：`sudo nginx -t`
-2. 检查构建产物是否存在：`ls -la /var/www/account-permission/`
-3. 检查 Nginx 错误日志：`sudo tail -f /var/log/nginx/error.log`
-4. 确认后端 API 可访问：`curl http://localhost:9000/api/auth/login -X POST -H "Content-Type: application/json" -d '{"username":"admin","password":"admin123"}'`
 
 ---
 
@@ -563,7 +498,3 @@ uvicorn app.main:app --host 0.0.0.0 --port 9000
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！
-
-## 📧 联系方式
-
-如有问题，请提交 Issue 或联系维护者。
