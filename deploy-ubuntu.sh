@@ -411,6 +411,13 @@ JWT_EXPIRE_MINUTES=480
 EOF
         warn "⚠️  请编辑 .env 配置数据库连接信息"
         warn "   文件位置: ${PROJECT_DIR}/backend/.env"
+    else
+        info "✅ 使用现有 .env 配置"
+        # 显示数据库配置
+        local db_host=$(grep -E "^MYSQL_HOST=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+        local db_name=$(grep -E "^MYSQL_DATABASE=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+        info "   数据库主机: $db_host"
+        info "   数据库名称: $db_name"
     fi
 
     # 检查是否需要重建虚拟环境
@@ -454,6 +461,19 @@ EOF
         deactivate
     else
         info "虚拟环境已存在且完整，跳过创建"
+    fi
+
+    # 初始化数据库
+    info "初始化数据库..."
+    source venv/bin/activate
+    python init_db.py
+    local init_result=$?
+    deactivate
+
+    if [ $init_result -ne 0 ]; then
+        error "数据库初始化失败"
+        error "请检查 .env 中的数据库配置是否正确"
+        return 1
     fi
 
     info "✅ 后端配置完成"
