@@ -444,6 +444,18 @@ setup_backend() {
         warn "虚拟环境缺少依赖，将重建"
     else
         info "虚拟环境已存在且完整"
+        # 修复 bcrypt 版本兼容问题
+        source venv/bin/activate
+        local bcrypt_ver=$(pip show bcrypt 2>/dev/null | grep Version | awk '{print $2}')
+        if [ -n "$bcrypt_ver" ]; then
+            local bcrypt_major=$(echo $bcrypt_ver | cut -d. -f1)
+            local bcrypt_minor=$(echo $bcrypt_ver | cut -d. -f2)
+            if [ "$bcrypt_major" -ge 4 ] && [ "$bcrypt_minor" -ge 1 ]; then
+                warn "检测到 bcrypt $bcrypt_ver 与 passlib 不兼容，正在降级..."
+                pip install bcrypt==4.0.1 2>/dev/null
+            fi
+        fi
+        deactivate
     fi
 
     if [ "$need_rebuild" = true ]; then
@@ -463,6 +475,9 @@ setup_backend() {
             deactivate
             return 1
         }
+
+        # 确保 bcrypt 版本兼容
+        pip install bcrypt==4.0.1 2>/dev/null
 
         deactivate
     fi
