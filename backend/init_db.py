@@ -34,10 +34,11 @@ def main():
     # 测试数据库连接
     print("测试数据库连接...")
     from app.models.base import engine
+    from sqlalchemy import text
 
     try:
         with engine.connect() as conn:
-            result = conn.execute("SELECT 1")
+            result = conn.execute(text("SELECT 1"))
             print("✅ 数据库连接成功")
     except Exception as e:
         print(f"❌ 数据库连接失败: {e}")
