@@ -2,7 +2,7 @@
 # ============================================
 # 人员账号与权限台账管理平台 - Ubuntu 一键部署脚本
 # 不使用 Docker，纯原生部署
-# 版本: v5.0 - 保留 .env 和虚拟环境
+# 版本: v6.0 - 修复执行顺序、保留用户配置
 # ============================================
 
 # 颜色定义
@@ -92,29 +92,6 @@ check_port() {
     return 0
 }
 
-# 检查是否配置了外部数据库
-check_external_db() {
-    local env_file="${PROJECT_DIR}/backend/.env"
-
-    # 也检查当前目录
-    if [ -f "./backend/.env" ]; then
-        env_file="./backend/.env"
-    fi
-
-    if [ -f "$env_file" ]; then
-        local host=$(grep -E "^MYSQL_HOST=" "$env_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
-        local password=$(grep -E "^MYSQL_PASSWORD=" "$env_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
-
-        if [ -n "$host" ] && [ "$host" != "localhost" ] && [ "$host" != "127.0.0.1" ] && [ -n "$password" ]; then
-            USE_EXTERNAL_DB=true
-            info "检测到外部数据库配置: $host"
-            return 0
-        fi
-    fi
-
-    return 1
-}
-
 # 安装系统依赖
 install_dependencies() {
     step "安装系统依赖..."
@@ -126,7 +103,7 @@ install_dependencies() {
         libssl-dev libffi-dev python3-dev
         python3-pip python3-venv
         software-properties-common gnupg lsb-release
-        net-tools iproute2
+        net-tools iproute2 mysql-client
     )
 
     for pkg in "${packages[@]}"; do
@@ -172,13 +149,11 @@ install_nodejs() {
 
     info "正在安装 Node.js ${REQUIRED_NODE_MAJOR}..."
 
-    # 方式1: NodeSource
     if curl -fsSL https://deb.nodesource.com/setup_${REQUIRED_NODE_MAJOR}.x -o /tmp/setup_node.sh 2>/dev/null; then
         bash /tmp/setup_node.sh 2>/dev/null
         apt-get install -y nodejs 2>/dev/null
     fi
 
-    # 方式2: 直接下载二进制
     if ! command -v node &> /dev/null || [ "$(node -v 2>/dev/null | sed 's/v//' | cut -d. -f1)" -lt "$REQUIRED_NODE_MAJOR" ]; then
         warn "NodeSource 安装失败，尝试直接下载..."
         local NODE_VERSION="v22.16.0"
@@ -204,43 +179,6 @@ install_nodejs() {
         error "Node.js 安装失败"
         return 1
     fi
-}
-
-# 安装 MySQL（仅本地数据库时）
-install_mysql() {
-    if [ "$USE_EXTERNAL_DB" = true ]; then
-        info "使用外部数据库，跳过 MySQL 安装"
-        return 0
-    fi
-
-    step "检查 MySQL..."
-
-    if command -v mysql &> /dev/null; then
-        info "MySQL 已安装"
-        # 确保 MySQL 运行
-        if ! mysqladmin ping -u root --silent 2>/dev/null; then
-            start_mysql
-            wait_for_mysql 30
-        fi
-        return 0
-    fi
-
-    info "正在安装数据库..."
-    export DEBIAN_FRONTEND=noninteractive
-    debconf-set-selections <<< 'mysql-server mysql-server/root_password password root' 2>/dev/null
-    debconf-set-selections <<< 'mysql-server mysql-server/root_password_again password root' 2>/dev/null
-
-    retry "apt-get install -y mysql-server mysql-client" "安装 MySQL" 2 10 || {
-        warn "MySQL 安装失败，尝试 MariaDB..."
-        retry "apt-get install -y mariadb-server mariadb-client" "安装 MariaDB" 2 10 || {
-            error "数据库安装失败"
-            return 1
-        }
-    }
-
-    start_mysql
-    wait_for_mysql 60
-    info "数据库安装完成"
 }
 
 # 启动 MySQL
@@ -275,6 +213,42 @@ wait_for_mysql() {
     return 1
 }
 
+# 安装 MySQL
+install_mysql() {
+    if [ "$USE_EXTERNAL_DB" = true ]; then
+        info "使用外部数据库，跳过 MySQL 安装"
+        return 0
+    fi
+
+    step "检查 MySQL..."
+
+    if command -v mysql &> /dev/null; then
+        info "MySQL 已安装"
+        if ! mysqladmin ping -u root --silent 2>/dev/null; then
+            start_mysql
+            wait_for_mysql 30
+        fi
+        return 0
+    fi
+
+    info "正在安装数据库..."
+    export DEBIAN_FRONTEND=noninteractive
+    debconf-set-selections <<< 'mysql-server mysql-server/root_password password root' 2>/dev/null
+    debconf-set-selections <<< 'mysql-server mysql-server/root_password_again password root' 2>/dev/null
+
+    retry "apt-get install -y mysql-server mysql-client" "安装 MySQL" 2 10 || {
+        warn "MySQL 安装失败，尝试 MariaDB..."
+        retry "apt-get install -y mariadb-server mariadb-client" "安装 MariaDB" 2 10 || {
+            error "数据库安装失败"
+            return 1
+        }
+    }
+
+    start_mysql
+    wait_for_mysql 60
+    info "数据库安装完成"
+}
+
 # 安装 Nginx
 install_nginx() {
     step "检查 Nginx..."
@@ -304,75 +278,49 @@ start_nginx() {
     fi
 }
 
-# 配置本地 MySQL
-setup_local_mysql() {
-    if [ "$USE_EXTERNAL_DB" = true ]; then
-        return 0
-    fi
-
-    step "配置本地 MySQL 数据库..."
-
-    local MYSQL_PASSWORD=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 16)
-    local JWT_SECRET=$(openssl rand -base64 32)
-
-    local mysql_cmd=""
-
-    # 尝试连接 MySQL
-    if mysql -u root -e "SELECT 1" &>/dev/null; then
-        mysql_cmd="mysql -u root"
-    elif mysql -u root -proot -e "SELECT 1" &>/dev/null; then
-        mysql_cmd="mysql -u root -proot"
-    else
-        error "无法连接 MySQL，请手动配置"
-        return 1
-    fi
-
-    # 创建数据库和用户
-    $mysql_cmd << EOF
-CREATE DATABASE IF NOT EXISTS account_permission DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'app_user'@'localhost' IDENTIFIED BY '${MYSQL_PASSWORD}';
-GRANT ALL PRIVILEGES ON account_permission.* TO 'app_user'@'localhost';
-FLUSH PRIVILEGES;
-EOF
-
-    # 写入 .env（仅当不存在时）
-    if [ ! -f "${PROJECT_DIR}/backend/.env" ]; then
-        cat > ${PROJECT_DIR}/backend/.env << EOF
-MYSQL_HOST=localhost
-MYSQL_PORT=3306
-MYSQL_USER=app_user
-MYSQL_PASSWORD=${MYSQL_PASSWORD}
-MYSQL_DATABASE=account_permission
-JWT_SECRET_KEY=${JWT_SECRET}
-JWT_EXPIRE_MINUTES=480
-EOF
-        info "✅ 数据库配置完成，密码已写入 .env"
-    else
-        info "✅ 数据库配置完成（保留现有 .env）"
-    fi
-}
-
-# 部署项目文件
+# 部署项目文件（第一步，复制文件但保留 .env）
 deploy_project() {
     step "部署项目文件..."
 
-    mkdir -p ${PROJECT_DIR}
+    mkdir -p ${PROJECT_DIR}/backend
+    mkdir -p ${PROJECT_DIR}/frontend
 
-    # 备份 .env
+    # 备份现有 .env
     local env_backup=""
     if [ -f "${PROJECT_DIR}/backend/.env" ]; then
         env_backup=$(cat "${PROJECT_DIR}/backend/.env")
         info "已备份现有 .env 配置"
     fi
 
-    # 复制项目文件（排除不需要的）
+    # 备份现有 venv
+    local has_venv=false
+    if [ -d "${PROJECT_DIR}/backend/venv" ] && [ -f "${PROJECT_DIR}/backend/venv/bin/uvicorn" ]; then
+        has_venv=true
+        info "检测到现有虚拟环境，将保留"
+    fi
+
+    # 复制项目文件
     if [ -f "./backend/requirements.txt" ]; then
+        # 复制后端（排除 venv 和 .env）
         rsync -av \
+            --exclude='venv' \
+            --exclude='.env' \
+            --exclude='__pycache__' \
             --exclude='.git' \
             --exclude='node_modules' \
-            --exclude='__pycache__' \
-            --exclude='.env' \
-            ./ ${PROJECT_DIR}/ 2>/dev/null || cp -r . ${PROJECT_DIR}/
+            ./backend/ ${PROJECT_DIR}/backend/ 2>/dev/null || cp -r ./backend/ ${PROJECT_DIR}/
+
+        # 复制前端
+        rsync -av \
+            --exclude='node_modules' \
+            --exclude='dist' \
+            --exclude='.git' \
+            ./frontend/ ${PROJECT_DIR}/frontend/ 2>/dev/null || cp -r ./frontend/ ${PROJECT_DIR}/
+
+        # 复制其他文件
+        [ -f "./deploy-ubuntu.sh" ] && cp ./deploy-ubuntu.sh ${PROJECT_DIR}/
+        [ -f "./README.md" ] && cp ./README.md ${PROJECT_DIR}/
+        [ -f "./docker-compose.yml" ] && cp ./docker-compose.yml ${PROJECT_DIR}/
     else
         error "未找到项目文件，请在项目根目录运行此脚本"
         return 1
@@ -387,6 +335,74 @@ deploy_project() {
     info "项目文件部署完成"
 }
 
+# 检查是否使用外部数据库（在 deploy_project 之后调用）
+check_external_db() {
+    local env_file="${PROJECT_DIR}/backend/.env"
+
+    if [ -f "$env_file" ]; then
+        local host=$(grep -E "^MYSQL_HOST=" "$env_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+        local password=$(grep -E "^MYSQL_PASSWORD=" "$env_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+        local user=$(grep -E "^MYSQL_USER=" "$env_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+
+        # 如果配置了非空密码，且不是默认的占位符
+        if [ -n "$password" ] && [ "$password" != "请修改为你的数据库密码" ]; then
+            USE_EXTERNAL_DB=true
+            info "检测到数据库配置:"
+            info "  主机: $host"
+            info "  用户: $user"
+            return 0
+        fi
+    fi
+
+    info "未检测到有效数据库配置，将使用本地 MySQL"
+    return 1
+}
+
+# 配置本地 MySQL
+setup_local_mysql() {
+    if [ "$USE_EXTERNAL_DB" = true ]; then
+        return 0
+    fi
+
+    step "配置本地 MySQL 数据库..."
+
+    local MYSQL_PASSWORD=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 16)
+    local JWT_SECRET=$(openssl rand -base64 32)
+
+    local mysql_cmd=""
+
+    if mysql -u root -e "SELECT 1" &>/dev/null; then
+        mysql_cmd="mysql -u root"
+    elif mysql -u root -proot -e "SELECT 1" &>/dev/null; then
+        mysql_cmd="mysql -u root -proot"
+    else
+        error "无法连接 MySQL，请手动配置"
+        return 1
+    fi
+
+    $mysql_cmd << EOF
+CREATE DATABASE IF NOT EXISTS account_permission DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'app_user'@'localhost' IDENTIFIED BY '${MYSQL_PASSWORD}';
+GRANT ALL PRIVILEGES ON account_permission.* TO 'app_user'@'localhost';
+FLUSH PRIVILEGES;
+EOF
+
+    # 写入 .env
+    cat > ${PROJECT_DIR}/backend/.env << EOF
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=app_user
+MYSQL_PASSWORD=${MYSQL_PASSWORD}
+MYSQL_DATABASE=account_permission
+JWT_SECRET_KEY=${JWT_SECRET}
+JWT_EXPIRE_MINUTES=480
+EOF
+
+    info "✅ 本地数据库配置完成"
+    info "   用户: app_user"
+    info "   密码: ${MYSQL_PASSWORD}"
+}
+
 # 配置后端
 setup_backend() {
     step "配置后端..."
@@ -396,48 +412,33 @@ setup_backend() {
         return 1
     }
 
-    # 如果没有 .env，创建默认配置
+    # 检查 .env 是否存在
     if [ ! -f ".env" ]; then
-        warn ".env 文件不存在，创建默认配置..."
-        local JWT_SECRET=$(openssl rand -base64 32)
-        cat > .env << EOF
-MYSQL_HOST=localhost
-MYSQL_PORT=3306
-MYSQL_USER=app_user
-MYSQL_PASSWORD=请修改为你的数据库密码
-MYSQL_DATABASE=account_permission
-JWT_SECRET_KEY=${JWT_SECRET}
-JWT_EXPIRE_MINUTES=480
-EOF
-        warn "⚠️  请编辑 .env 配置数据库连接信息"
-        warn "   文件位置: ${PROJECT_DIR}/backend/.env"
-    else
-        info "✅ 使用现有 .env 配置"
-        # 显示数据库配置
-        local db_host=$(grep -E "^MYSQL_HOST=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
-        local db_name=$(grep -E "^MYSQL_DATABASE=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
-        info "   数据库主机: $db_host"
-        info "   数据库名称: $db_name"
+        error ".env 文件不存在"
+        error "请先创建 ${PROJECT_DIR}/backend/.env 配置数据库连接"
+        return 1
     fi
 
-    # 检查是否需要重建虚拟环境
+    # 显示当前配置
+    info "当前数据库配置:"
+    grep -E "^MYSQL_" .env | while read line; do
+        info "  $line"
+    done
+
+    # 检查虚拟环境
     local need_rebuild=false
 
     if [ ! -d "venv" ]; then
         need_rebuild=true
         info "虚拟环境不存在，将创建"
-    elif [ ! -f "venv/bin/activate" ]; then
+    elif [ ! -f "venv/bin/activate" ] || [ ! -f "venv/bin/uvicorn" ]; then
         need_rebuild=true
-        warn "虚拟环境损坏，将重建"
-    elif [ ! -f "venv/bin/uvicorn" ]; then
+        warn "虚拟环境不完整，将重建"
+    elif ! venv/bin/python -c "import fastapi" &>/dev/null; then
         need_rebuild=true
         warn "虚拟环境缺少依赖，将重建"
     else
-        # 检查依赖是否完整
-        if ! venv/bin/python -c "import fastapi" &>/dev/null; then
-            need_rebuild=true
-            warn "虚拟环境缺少 FastAPI，将重建"
-        fi
+        info "虚拟环境已存在且完整"
     fi
 
     if [ "$need_rebuild" = true ]; then
@@ -459,8 +460,6 @@ EOF
         }
 
         deactivate
-    else
-        info "虚拟环境已存在且完整，跳过创建"
     fi
 
     # 初始化数据库
@@ -472,7 +471,7 @@ EOF
 
     if [ $init_result -ne 0 ]; then
         error "数据库初始化失败"
-        error "请检查 .env 中的数据库配置是否正确"
+        error "请检查 .env 中的数据库配置"
         return 1
     fi
 
@@ -486,12 +485,11 @@ build_frontend() {
     cd ${PROJECT_DIR}/frontend || {
         error "前端目录不存在"
         return 1
-    }
+    fi
 
     # 检查是否需要重新构建
-    if [ -d "dist" ] && [ -f "dist/index.html" ] && [ -d "node_modules" ]; then
-        info "前端已构建，跳过（如需重建请删除 frontend/dist 目录）"
-        # 复制到 nginx 目录
+    if [ -d "dist" ] && [ -f "dist/index.html" ]; then
+        info "前端已构建，跳过"
         mkdir -p /var/www/account-permission
         rm -rf /var/www/account-permission/*
         cp -r dist/* /var/www/account-permission/
@@ -508,8 +506,6 @@ build_frontend() {
                 return 1
             }
         }
-    else
-        info "node_modules 已存在，跳过安装"
     fi
 
     # 构建
@@ -531,6 +527,22 @@ build_frontend() {
     info "✅ 前端构建完成"
 }
 
+# 停止旧服务
+stop_old_services() {
+    if [ "$HAS_SYSTEMD" = true ]; then
+        systemctl stop account-permission-backend 2>/dev/null
+    fi
+
+    if [ -f "${PROJECT_DIR}/.backend.pid" ]; then
+        local pid=$(cat "${PROJECT_DIR}/.backend.pid")
+        kill "$pid" 2>/dev/null
+        rm -f "${PROJECT_DIR}/.backend.pid"
+    fi
+
+    pkill -f "uvicorn app.main:app.*${BACKEND_PORT}" 2>/dev/null
+    sleep 1
+}
+
 # 配置服务
 setup_services() {
     step "配置服务..."
@@ -540,7 +552,6 @@ setup_services() {
         return 1
     fi
 
-    # 先停止旧服务
     stop_old_services
 
     if [ "$HAS_SYSTEMD" = true ]; then
@@ -548,25 +559,6 @@ setup_services() {
     else
         setup_startup_script
     fi
-}
-
-# 停止旧服务
-stop_old_services() {
-    # 停止 systemd 服务
-    if [ "$HAS_SYSTEMD" = true ]; then
-        systemctl stop account-permission-backend 2>/dev/null
-    fi
-
-    # 停止旧进程
-    if [ -f "${PROJECT_DIR}/.backend.pid" ]; then
-        local pid=$(cat "${PROJECT_DIR}/.backend.pid")
-        kill "$pid" 2>/dev/null
-        rm -f "${PROJECT_DIR}/.backend.pid"
-    fi
-
-    # 杀死可能残留的 uvicorn 进程
-    pkill -f "uvicorn app.main:app.*${BACKEND_PORT}" 2>/dev/null
-    sleep 1
 }
 
 # 配置 systemd 服务
@@ -605,9 +597,9 @@ EOF
     fi
 }
 
-# 配置启动脚本（无 systemd 时）
+# 配置启动脚本
 setup_startup_script() {
-    cat > ${PROJECT_DIR}/start.sh << 'EOF'
+    cat > ${PROJECT_DIR}/start.sh << 'EOFSCRIPT'
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="${SCRIPT_DIR}/backend"
@@ -620,7 +612,6 @@ start_backend() {
         return 0
     fi
 
-    # 杀死可能残留的进程
     pkill -f "uvicorn app.main:app" 2>/dev/null
     sleep 1
 
@@ -666,7 +657,7 @@ case "$1" in
     status)  status_backend ;;
     *)       echo "用法: $0 {start|stop|restart|status}" ;;
 esac
-EOF
+EOFSCRIPT
     chmod +x ${PROJECT_DIR}/start.sh
 
     # 启动后端
@@ -754,31 +745,9 @@ save_credentials() {
 ============================================
 访问地址: http://${IP}:${FRONTEND_PORT}
 默认账号: admin / admin123
-凭证文件: ${PROJECT_DIR}/.credentials
-
-数据库配置 (.env)
---------------------------------------------
-$(cat ${PROJECT_DIR}/backend/.env 2>/dev/null | grep -E "^MYSQL_" || echo "请配置 .env")
-
-服务管理
---------------------------------------------
+配置文件: ${PROJECT_DIR}/backend/.env
+============================================
 EOF
-
-    if [ "$HAS_SYSTEMD" = true ]; then
-        cat >> ${PROJECT_DIR}/.credentials << EOF
-重启后端: sudo systemctl restart account-permission-backend
-查看状态: sudo systemctl status account-permission-backend
-查看日志: sudo journalctl -u account-permission-backend -f
-EOF
-    else
-        cat >> ${PROJECT_DIR}/.credentials << EOF
-启动后端: ${PROJECT_DIR}/start.sh start
-停止后端: ${PROJECT_DIR}/start.sh stop
-重启后端: ${PROJECT_DIR}/start.sh restart
-查看状态: ${PROJECT_DIR}/start.sh status
-查看日志: cat ${PROJECT_DIR}/backend.log
-EOF
-    fi
 
     chmod 600 ${PROJECT_DIR}/.credentials
     info "凭证已保存到: ${PROJECT_DIR}/.credentials"
@@ -790,28 +759,20 @@ verify_deployment() {
 
     local all_ok=true
 
-    # 检查后端
     if [ "$HAS_SYSTEMD" = true ]; then
         systemctl is-active --quiet account-permission-backend && info "✅ 后端服务运行正常" || { warn "⚠️  后端服务异常"; all_ok=false; }
     else
         [ -f "${PROJECT_DIR}/.backend.pid" ] && kill -0 $(cat "${PROJECT_DIR}/.backend.pid") 2>/dev/null && info "✅ 后端服务运行正常" || { warn "⚠️  后端服务异常"; all_ok=false; }
     fi
 
-    # 检查 Nginx
     pgrep -x nginx > /dev/null && info "✅ Nginx 运行正常" || { warn "⚠️  Nginx 异常"; all_ok=false; }
 
-    # 测试 API
     sleep 2
     local api_code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${BACKEND_PORT}/docs 2>/dev/null)
     [ "$api_code" = "200" ] && info "✅ 后端 API 可访问" || { warn "⚠️  后端 API 异常 (HTTP: $api_code)"; all_ok=false; }
 
-    # 测试前端
     local front_code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${FRONTEND_PORT}/ 2>/dev/null)
     [ "$front_code" = "200" ] && info "✅ 前端页面可访问" || { warn "⚠️  前端页面异常 (HTTP: $front_code)"; all_ok=false; }
-
-    # 测试登录
-    local login_result=$(curl -s http://localhost:${FRONTEND_PORT}/api/auth/login -X POST -H "Content-Type: application/json" -d '{"username":"admin","password":"admin123"}' 2>/dev/null)
-    echo "$login_result" | grep -q '"code":200' && info "✅ 登录功能正常" || warn "⚠️  登录测试失败（可能是首次启动，数据库正在初始化）"
 
     [ "$all_ok" = true ] && info "🎉 所有服务验证通过！" || warn "⚠️  部分服务异常，请根据提示排查"
 }
@@ -829,7 +790,6 @@ show_info() {
     echo "  默认账号: admin / admin123"
     echo ""
     echo "  配置文件: ${PROJECT_DIR}/backend/.env"
-    echo "  凭证文件: ${PROJECT_DIR}/.credentials"
     echo ""
 
     if [ "$HAS_SYSTEMD" = false ]; then
@@ -854,27 +814,29 @@ main() {
     check_root
     check_system
 
-    # 检查外部数据库
-    check_external_db
-
-    # 安装依赖
+    # 第一步：安装系统依赖
     install_dependencies || warn "系统依赖安装有问题"
     install_python || { error "Python 安装失败"; exit 1; }
     install_nodejs || warn "Node.js 安装有问题"
-    install_mysql || { error "数据库安装失败"; exit 1; }
     install_nginx || warn "Nginx 安装有问题"
 
-    # 配置数据库
+    # 第二步：部署项目文件（复制文件、保留 .env）
+    deploy_project || { error "项目部署失败"; exit 1; }
+
+    # 第三步：检查数据库配置（在文件部署之后）
+    check_external_db
+
+    # 第四步：安装和配置数据库
+    install_mysql || { error "数据库安装失败"; exit 1; }
     setup_local_mysql || { error "数据库配置失败"; exit 1; }
 
-    # 部署项目
-    deploy_project || { error "项目部署失败"; exit 1; }
+    # 第五步：配置后端（使用 .env 中的配置）
     setup_backend || { error "后端配置失败"; exit 1; }
 
-    # 前端构建
+    # 第六步：构建前端
     build_frontend || warn "前端构建失败"
 
-    # 服务配置
+    # 第七步：配置和启动服务
     setup_services || error "服务配置失败"
     setup_nginx || warn "Nginx 配置有问题"
 
