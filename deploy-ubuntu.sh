@@ -2,7 +2,7 @@
 # ============================================
 # 人员账号与权限台账管理平台 - Ubuntu 一键部署脚本
 # 不使用 Docker，纯原生部署
-# 版本: v2.0 - 增强容错和重试机制
+# 版本: v3.0 - 支持无 systemd 环境（WSL/容器）
 # ============================================
 
 # 颜色定义
@@ -26,6 +26,12 @@ BACKEND_PORT=9000
 FRONTEND_PORT=80
 MAX_RETRY=3
 RETRY_DELAY=5
+
+# 检测是否有 systemd
+HAS_SYSTEMD=false
+if pidof systemd > /dev/null 2>&1 && [ "$(cat /proc/1/comm 2>/dev/null)" = "systemd" ]; then
+    HAS_SYSTEMD=true
+fi
 
 # 带重试的命令执行
 retry() {
@@ -69,34 +75,20 @@ check_system() {
     else
         warn "无法检测操作系统类型，继续尝试..."
     fi
+
+    if [ "$HAS_SYSTEMD" = false ]; then
+        warn "未检测到 systemd，将使用直接进程管理"
+    fi
 }
 
 # 检查端口是否被占用
 check_port() {
     local port=$1
-    if ss -tlnp | grep -q ":${port} "; then
+    if ss -tlnp 2>/dev/null | grep -q ":${port} " || netstat -tlnp 2>/dev/null | grep -q ":${port} "; then
         warn "端口 ${port} 已被占用"
         return 1
     fi
     return 0
-}
-
-# 等待服务就绪
-wait_for_service() {
-    local service=$1
-    local max_wait=${2:-30}
-    local count=0
-
-    while [ $count -lt $max_wait ]; do
-        if systemctl is-active --quiet "$service" 2>/dev/null; then
-            return 0
-        fi
-        sleep 1
-        count=$((count + 1))
-    done
-
-    warn "服务 ${service} 启动超时"
-    return 1
 }
 
 # 等待 MySQL 就绪
@@ -106,12 +98,16 @@ wait_for_mysql() {
 
     info "等待 MySQL 启动..."
     while [ $count -lt $max_wait ]; do
+        # 尝试多种方式检测
         if mysqladmin ping -u root --silent 2>/dev/null; then
             info "MySQL 已就绪"
             return 0
         fi
-        # 尝试用 socket 连接
         if mysql -u root -e "SELECT 1" &>/dev/null; then
+            info "MySQL 已就绪"
+            return 0
+        fi
+        if mysql -u root -proot -e "SELECT 1" &>/dev/null; then
             info "MySQL 已就绪"
             return 0
         fi
@@ -121,6 +117,46 @@ wait_for_mysql() {
 
     warn "MySQL 启动超时，尝试继续..."
     return 1
+}
+
+# 启动 MySQL（兼容无 systemd）
+start_mysql() {
+    if [ "$HAS_SYSTEMD" = true ]; then
+        systemctl start mysql 2>/dev/null || systemctl start mysqld 2>/dev/null
+        systemctl enable mysql 2>/dev/null || systemctl enable mysqld 2>/dev/null
+    else
+        # 无 systemd 时直接启动
+        if command -v mysqld_safe &> /dev/null; then
+            mysqld_safe --user=mysql &
+        elif command -v mysqld &> /dev/null; then
+            mysqld --user=mysql &
+        else
+            # 尝试通过 service 命令
+            service mysql start 2>/dev/null || service mysqld start 2>/dev/null
+        fi
+    fi
+    sleep 3
+}
+
+# 启动 Nginx（兼容无 systemd）
+start_nginx() {
+    if [ "$HAS_SYSTEMD" = true ]; then
+        systemctl restart nginx
+    else
+        # 无 systemd 时直接启动
+        nginx -s stop 2>/dev/null
+        sleep 1
+        nginx
+    fi
+}
+
+# 停止 Nginx
+stop_nginx() {
+    if [ "$HAS_SYSTEMD" = true ]; then
+        systemctl stop nginx 2>/dev/null
+    else
+        nginx -s stop 2>/dev/null
+    fi
 }
 
 # 安装系统依赖
@@ -138,12 +174,12 @@ install_dependencies() {
         libssl-dev libffi-dev python3-dev
         python3-pip python3-venv
         software-properties-common gnupg lsb-release
-        net-tools ss-utils
+        net-tools iproute2
     )
 
     for pkg in "${packages[@]}"; do
         if ! dpkg -l | grep -q "^ii  $pkg "; then
-            apt-get install -y "$pkg" || warn "安装 $pkg 失败，继续..."
+            apt-get install -y "$pkg" 2>/dev/null || warn "安装 $pkg 失败，继续..."
         fi
     done
 
@@ -168,11 +204,11 @@ install_python() {
     # 确保 pip 可用
     python3 -m pip --version &>/dev/null || {
         info "安装 pip..."
-        apt-get install -y python3-pip || warn "pip 安装失败"
+        apt-get install -y python3-pip 2>/dev/null || warn "pip 安装失败"
     }
 }
 
-# 安装 Node.js 18
+# 安装 Node.js
 install_nodejs() {
     step "检查 Node.js..."
 
@@ -188,21 +224,31 @@ install_nodejs() {
         fi
     fi
 
-    info "正在安装 Node.js 18..."
+    info "正在安装 Node.js..."
 
-    # 尝试 nodesource
-    if curl -fsSL https://deb.nodesource.com/setup_18.x -o /tmp/setup_node.sh; then
-        bash /tmp/setup_node.sh
-        apt-get install -y nodejs
-    else
-        warn "NodeSource 安装失败，尝试使用 Ubuntu 默认源..."
-        apt-get install -y nodejs npm
+    # 尝试多种安装方式
+    # 方式1: NodeSource
+    if curl -fsSL https://deb.nodesource.com/setup_18.x -o /tmp/setup_node.sh 2>/dev/null; then
+        bash /tmp/setup_node.sh 2>/dev/null
+        apt-get install -y nodejs 2>/dev/null
+    fi
+
+    # 方式2: Ubuntu 默认源
+    if ! command -v node &> /dev/null; then
+        warn "NodeSource 安装失败，尝试 Ubuntu 默认源..."
+        apt-get install -y nodejs npm 2>/dev/null
+    fi
+
+    # 方式3: snap
+    if ! command -v node &> /dev/null && command -v snap &> /dev/null; then
+        warn "apt 安装失败，尝试 snap..."
+        snap install node --classic 2>/dev/null
     fi
 
     if command -v node &> /dev/null; then
         info "Node.js 安装完成: $(node --version)"
     else
-        error "Node.js 安装失败"
+        error "Node.js 安装失败，请手动安装"
         return 1
     fi
 }
@@ -211,17 +257,19 @@ install_nodejs() {
 install_mysql() {
     step "检查 MySQL..."
 
+    # 检查是否已安装
     if command -v mysql &> /dev/null; then
         info "MySQL 已安装: $(mysql --version 2>/dev/null | awk '{print $6}' | tr -d ',')"
         # 确保 MySQL 正在运行
-        if ! systemctl is-active --quiet mysql; then
+        if ! mysqladmin ping -u root --silent 2>/dev/null && ! mysql -u root -e "SELECT 1" &>/dev/null; then
             info "启动 MySQL..."
-            systemctl start mysql 2>/dev/null || systemctl start mysqld 2>/dev/null || warn "MySQL 启动失败"
+            start_mysql
+            wait_for_mysql 30
         fi
         return 0
     fi
 
-    info "正在安装 MySQL..."
+    info "正在安装数据库..."
 
     # 非交互式安装
     export DEBIAN_FRONTEND=noninteractive
@@ -230,21 +278,23 @@ install_mysql() {
     debconf-set-selections <<< 'mysql-server mysql-server/root_password password root' 2>/dev/null
     debconf-set-selections <<< 'mysql-server mysql-server/root_password_again password root' 2>/dev/null
 
-    # 尝试安装
-    retry "apt-get install -y mysql-server mysql-client" "安装 MySQL" 3 10 || {
-        # 尝试 mariadb 作为备选
+    # 尝试安装 MySQL
+    local installed=false
+    retry "apt-get install -y mysql-server mysql-client" "安装 MySQL" 2 10 && installed=true
+
+    # MySQL 失败则尝试 MariaDB
+    if [ "$installed" = false ]; then
         warn "MySQL 安装失败，尝试 MariaDB..."
-        retry "apt-get install -y mariadb-server mariadb-client" "安装 MariaDB" || {
-            error "数据库安装失败"
-            return 1
-        }
-    }
+        retry "apt-get install -y mariadb-server mariadb-client" "安装 MariaDB" 2 10 && installed=true
+    fi
 
-    # 启动数据库服务
-    systemctl start mysql 2>/dev/null || systemctl start mysqld 2>/dev/null || systemctl start mariadb 2>/dev/null
-    systemctl enable mysql 2>/dev/null || systemctl enable mysqld 2>/dev/null || systemctl enable mariadb 2>/dev/null
+    if [ "$installed" = false ]; then
+        error "数据库安装失败"
+        return 1
+    fi
 
-    # 等待数据库就绪
+    # 启动数据库
+    start_mysql
     wait_for_mysql 60
 
     info "数据库安装完成"
@@ -265,10 +315,7 @@ install_nginx() {
     fi
 
     # 确保 Nginx 运行
-    if ! systemctl is-active --quiet nginx; then
-        systemctl start nginx || warn "Nginx 启动失败"
-    fi
-    systemctl enable nginx 2>/dev/null
+    start_nginx 2>/dev/null
 
     info "Nginx 安装完成"
 }
@@ -300,17 +347,61 @@ setup_mysql() {
     fi
 
     # 方式3: sudo mysql
-    if [ "$connected" = false ] && sudo mysql -e "SELECT 1" &>/dev/null; then
-        mysql_cmd="sudo mysql"
-        connected=true
-        info "MySQL 连接方式: sudo mysql"
+    if [ "$connected" = false ]; then
+        local sudo_mysql=$(sudo mysql -e "SELECT 1" 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            mysql_cmd="sudo mysql"
+            connected=true
+            info "MySQL 连接方式: sudo mysql"
+        fi
     fi
 
-    # 方式4: auth_socket
+    # 方式4: 尝试修复认证
     if [ "$connected" = false ]; then
         warn "尝试修复 MySQL 认证..."
-        # 尝试切换到 auth_socket
-        sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root'; FLUSH PRIVILEGES;" 2>/dev/null
+
+        # 尝试用 auth_socket 方式连接并修改密码
+        if command -v mysql &> /dev/null; then
+            # 尝试直接通过 socket
+            mysql --socket=/var/run/mysqld/mysqld.sock -u root -e "
+                ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root';
+                FLUSH PRIVILEGES;
+            " 2>/dev/null
+
+            if mysql -u root -proot -e "SELECT 1" &>/dev/null; then
+                mysql_cmd="mysql -u root -proot"
+                connected=true
+                info "MySQL 连接方式: root/root (已修复)"
+            fi
+        fi
+    fi
+
+    # 方式5: 尝试无密码连接（某些安装可能没有设密码）
+    if [ "$connected" = false ]; then
+        # 重启 MySQL 并跳过权限
+        warn "尝试跳过权限验证启动 MySQL..."
+        if [ "$HAS_SYSTEMD" = true ]; then
+            systemctl stop mysql 2>/dev/null || systemctl stop mysqld 2>/dev/null
+        else
+            killall mysqld 2>/dev/null
+            sleep 2
+        fi
+
+        mysqld_safe --skip-grant-tables &
+        sleep 5
+
+        mysql -u root -e "
+            FLUSH PRIVILEGES;
+            ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root';
+            FLUSH PRIVILEGES;
+        " 2>/dev/null
+
+        # 重启正常模式
+        killall mysqld 2>/dev/null
+        sleep 3
+        start_mysql
+        wait_for_mysql 30
+
         if mysql -u root -proot -e "SELECT 1" &>/dev/null; then
             mysql_cmd="mysql -u root -proot"
             connected=true
@@ -319,10 +410,13 @@ setup_mysql() {
     fi
 
     if [ "$connected" = false ]; then
-        error "无法连接 MySQL，请手动配置数据库后重新运行脚本"
-        error "或使用以下命令重置 MySQL root 密码:"
-        error "  sudo mysql"
-        error "  ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'your_password';"
+        error "无法连接 MySQL"
+        error ""
+        error "请手动执行以下步骤:"
+        error "1. sudo mysql"
+        error "2. ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root';"
+        error "3. FLUSH PRIVILEGES;"
+        error "4. 重新运行此脚本"
         return 1
     fi
 
@@ -391,7 +485,7 @@ setup_backend() {
 
     # 安装依赖（带重试）
     info "安装 Python 依赖..."
-    pip install --upgrade pip || warn "pip 升级失败，继续..."
+    pip install --upgrade pip 2>/dev/null || warn "pip 升级失败，继续..."
     retry "pip install -r requirements.txt" "安装 Python 依赖" 3 15 || {
         error "Python 依赖安装失败"
         deactivate
@@ -469,9 +563,9 @@ build_frontend() {
     info "✅ 前端构建完成"
 }
 
-# 配置 systemd 服务
-setup_systemd() {
-    step "配置 systemd 服务..."
+# 配置服务
+setup_services() {
+    step "配置服务..."
 
     # 检查后端目录
     if [ ! -f "${PROJECT_DIR}/backend/venv/bin/uvicorn" ]; then
@@ -479,6 +573,17 @@ setup_systemd() {
         return 1
     fi
 
+    if [ "$HAS_SYSTEMD" = true ]; then
+        # 使用 systemd
+        setup_systemd_service
+    else
+        # 使用启动脚本
+        setup_startup_script
+    fi
+}
+
+# 配置 systemd 服务
+setup_systemd_service() {
     # 创建后端服务
     cat > /etc/systemd/system/account-permission-backend.service << EOF
 [Unit]
@@ -500,24 +605,107 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-    # 重新加载 systemd
     systemctl daemon-reload
-
-    # 停止旧服务（如果存在）
     systemctl stop account-permission-backend 2>/dev/null
-
-    # 启用并启动服务
     systemctl enable account-permission-backend
     systemctl start account-permission-backend
 
-    # 等待服务启动
     sleep 3
-    wait_for_service account-permission-backend 15
-
     if systemctl is-active --quiet account-permission-backend; then
         info "✅ systemd 服务配置完成"
     else
         warn "后端服务启动异常，查看日志: journalctl -u account-permission-backend -n 20"
+    fi
+}
+
+# 配置启动脚本（无 systemd 时使用）
+setup_startup_script() {
+    # 创建启动脚本
+    cat > ${PROJECT_DIR}/start.sh << 'EOF'
+#!/bin/bash
+# 服务启动脚本
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BACKEND_DIR="${SCRIPT_DIR}/backend"
+PID_FILE="${SCRIPT_DIR}/.backend.pid"
+LOG_FILE="${SCRIPT_DIR}/backend.log"
+
+start_backend() {
+    if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
+        echo "后端服务已在运行 (PID: $(cat $PID_FILE))"
+        return 0
+    fi
+
+    echo "启动后端服务..."
+    cd "$BACKEND_DIR"
+    source venv/bin/activate
+    nohup uvicorn app.main:app --host 0.0.0.0 --port 9000 > "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE"
+    echo "后端服务已启动 (PID: $!)"
+}
+
+stop_backend() {
+    if [ -f "$PID_FILE" ]; then
+        local pid=$(cat "$PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "停止后端服务 (PID: $pid)..."
+            kill "$pid"
+            rm -f "$PID_FILE"
+        else
+            echo "后端服务未运行"
+            rm -f "$PID_FILE"
+        fi
+    else
+        echo "后端服务未运行"
+    fi
+}
+
+restart_backend() {
+    stop_backend
+    sleep 2
+    start_backend
+}
+
+status_backend() {
+    if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
+        echo "后端服务运行中 (PID: $(cat $PID_FILE))"
+    else
+        echo "后端服务未运行"
+    fi
+}
+
+case "$1" in
+    start)   start_backend ;;
+    stop)    stop_backend ;;
+    restart) restart_backend ;;
+    status)  status_backend ;;
+    *)
+        echo "用法: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+EOF
+    chmod +x ${PROJECT_DIR}/start.sh
+
+    # 停止旧进程
+    if [ -f "${PROJECT_DIR}/.backend.pid" ]; then
+        local old_pid=$(cat "${PROJECT_DIR}/.backend.pid")
+        kill "$old_pid" 2>/dev/null
+        rm -f "${PROJECT_DIR}/.backend.pid"
+    fi
+
+    # 启动后端
+    cd ${PROJECT_DIR}/backend
+    source venv/bin/activate
+    nohup uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_PORT} > ${PROJECT_DIR}/backend.log 2>&1 &
+    echo $! > ${PROJECT_DIR}/.backend.pid
+    deactivate
+
+    sleep 3
+    if kill -0 $(cat ${PROJECT_DIR}/.backend.pid) 2>/dev/null; then
+        info "✅ 后端服务启动完成 (PID: $(cat ${PROJECT_DIR}/.backend.pid))"
+    else
+        warn "后端服务启动异常，查看日志: cat ${PROJECT_DIR}/backend.log"
     fi
 }
 
@@ -533,12 +721,12 @@ setup_nginx() {
 
     # 检查端口
     if ! check_port $FRONTEND_PORT; then
-        # 尝试停止占用端口的服务
         warn "端口 ${FRONTEND_PORT} 被占用，尝试释放..."
-        # 检查是否是默认 Nginx 站点
         if [ -f /etc/nginx/sites-enabled/default ]; then
             rm -f /etc/nginx/sites-enabled/default
         fi
+        stop_nginx 2>/dev/null
+        sleep 1
     fi
 
     # 创建 Nginx 配置
@@ -578,9 +766,9 @@ EOF
     ln -sf /etc/nginx/sites-available/account-permission /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
 
-    # 测试 Nginx 配置
+    # 测试并重启 Nginx
     if nginx -t 2>&1; then
-        systemctl restart nginx
+        start_nginx
         info "✅ Nginx 配置完成"
     else
         error "Nginx 配置测试失败"
@@ -629,11 +817,26 @@ Token 过期时间: 480 分钟
 
 常用命令
 --------------------------------------------
+EOF
+
+    if [ "$HAS_SYSTEMD" = true ]; then
+        cat >> ${PROJECT_DIR}/.credentials << EOF
 查看后端状态: sudo systemctl status account-permission-backend
 重启后端: sudo systemctl restart account-permission-backend
 查看后端日志: sudo journalctl -u account-permission-backend -f
-重启 Nginx: sudo systemctl restart nginx
-查看 Nginx 日志: sudo tail -f /var/log/nginx/access.log
+EOF
+    else
+        cat >> ${PROJECT_DIR}/.credentials << EOF
+启动后端: ${PROJECT_DIR}/start.sh start
+停止后端: ${PROJECT_DIR}/start.sh stop
+重启后端: ${PROJECT_DIR}/start.sh restart
+查看后端状态: ${PROJECT_DIR}/start.sh status
+查看后端日志: cat ${PROJECT_DIR}/backend.log
+EOF
+    fi
+
+    cat >> ${PROJECT_DIR}/.credentials << EOF
+重启 Nginx: sudo nginx -s reload
 
 ============================================
 EOF
@@ -650,16 +853,24 @@ verify_deployment() {
     local all_ok=true
 
     # 检查后端服务
-    if systemctl is-active --quiet account-permission-backend; then
-        info "✅ 后端服务运行正常"
+    if [ "$HAS_SYSTEMD" = true ]; then
+        if systemctl is-active --quiet account-permission-backend; then
+            info "✅ 后端服务运行正常"
+        else
+            warn "⚠️  后端服务启动异常"
+            all_ok=false
+        fi
     else
-        warn "⚠️  后端服务启动异常"
-        warn "   查看日志: journalctl -u account-permission-backend -n 30"
-        all_ok=false
+        if [ -f "${PROJECT_DIR}/.backend.pid" ] && kill -0 $(cat "${PROJECT_DIR}/.backend.pid") 2>/dev/null; then
+            info "✅ 后端服务运行正常"
+        else
+            warn "⚠️  后端服务启动异常"
+            all_ok=false
+        fi
     fi
 
     # 检查 Nginx
-    if systemctl is-active --quiet nginx; then
+    if pgrep -x nginx > /dev/null; then
         info "✅ Nginx 运行正常"
     else
         warn "⚠️  Nginx 启动异常"
@@ -726,12 +937,16 @@ show_info() {
     echo ""
     echo "  凭证文件: ${PROJECT_DIR}/.credentials"
     echo ""
-    echo "  常用命令:"
-    echo "    查看后端状态: sudo systemctl status account-permission-backend"
-    echo "    重启后端: sudo systemctl restart account-permission-backend"
-    echo "    查看后端日志: sudo journalctl -u account-permission-backend -f"
-    echo "    重启 Nginx: sudo systemctl restart nginx"
-    echo ""
+
+    if [ "$HAS_SYSTEMD" = false ]; then
+        echo "  服务管理命令:"
+        echo "    启动: ${PROJECT_DIR}/start.sh start"
+        echo "    停止: ${PROJECT_DIR}/start.sh stop"
+        echo "    重启: ${PROJECT_DIR}/start.sh restart"
+        echo "    状态: ${PROJECT_DIR}/start.sh status"
+        echo ""
+    fi
+
     echo "============================================"
 }
 
@@ -768,7 +983,7 @@ main() {
     fi
 
     # 服务配置
-    setup_systemd || warn "systemd 服务配置有问题"
+    setup_services || warn "服务配置有问题"
     setup_nginx || warn "Nginx 配置有问题"
 
     # 保存凭证
